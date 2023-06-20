@@ -1,0 +1,660 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r library setup, include=FALSE}
+#Set up necessary libraries
+
+library(ggplot2)
+library(vegan)
+library(dplyr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(ggpubr)
+library(corrplot)
+library(eulerr)
+#library(BiocManager)
+#BiocManager::install("microbiome")
+library(microbiome) 
+
+```
+
+
+
+```{r}
+#Import to library(phyloseq)
+sharedfile <- "/Users/huanqi/Huanqi/Umich/Research OS/AS microbial analysis/DNA/Feb_Sep_16S/Sequencing data/stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.0.03.subsample.shared"
+taxfile <- "/Users/huanqi/Huanqi/Umich/Research OS/AS microbial analysis/DNA/Feb_Sep_16S/Sequencing data/stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.0.03.cons.taxonomy"
+mapfile<- "/Users/huanqi/Huanqi/Umich/Research OS/AS microbial analysis/DNA/Feb_Sep_16S/Sequencing data/MLSSsamples.csv"
+mothur_data_test <- import_mothur(mothur_shared_file = "/Users/huanqi/Huanqi/Umich/Research OS/AS microbial analysis/DNA/Feb_Sep_16S/Sequencing data/stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.0.03.subsample.shared",mothur_constaxonomy_file = "/Users/huanqi/Huanqi/Umich/Research OS/AS microbial analysis/DNA/Feb_Sep_16S/Sequencing data/stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.0.03.cons.taxonomy")
+
+
+#Check to view Metadata file
+map<-read.csv(mapfile)
+head(map)
+map <- sample_data(map)
+rownames(map) <- map$SampleID
+
+#Merge Metadata to Illumina data
+moth_merge<-merge_phyloseq(mothur_data_test,map)
+moth_merge
+```
+
+
+```{r}
+#Organize column names
+colnames(tax_table(moth_merge))<- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus","Species")
+```
+
+```{r}
+otu <- otu_table(moth_merge)
+otu
+#write.csv(otu,file = "out.csv")
+```
+
+```{r}
+tax <- tax_table(moth_merge)
+tax
+#write.csv(tax,file = "tax.csv")
+```
+
+```{r}
+#Filter out pcr blanks
+moth_sub <- moth_merge %>%
+  prune_taxa(taxa_sums(.) > 0, .)
+
+#Screen for bacterial sequences only
+erie <- moth_sub %>%
+  subset_taxa(
+    Kingdom == "k__Bacteria" 
+  )
+
+erie
+
+```
+```{r}
+#Sample summary of sequencing depth
+sample_sum_df <- data.frame(sum = sample_sums(erie))
+ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "indianred", binwidth = 1000) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  theme(axis.title.y = element_blank())
+
+# mean, max and min of sample read counts
+smin <- min(sample_sums(erie))
+smean <- mean(sample_sums(erie))
+smax <- max(sample_sums(erie))
+smin
+smean
+smax
+```
+
+```{r}
+#Measure alpha diversity
+alpha_diversity <- estimate_richness(erie, measure = c("Shannon", "Observed","Richness","ACE","Chao1","Simpson"))
+alpha_diversity
+H <- alpha_diversity$Shannon
+S1 <- alpha_diversity$Observed
+S <- log(S1)
+evenness <- H/S
+evenness
+alpha_diversity$Evenness = evenness
+alpha_diversity
+
+p <- plot_richness(erie, "Location", measures=c("Shannon", "Observed","Richness","ACE","Chao1","Simpson"), color="Date")
+p + geom_boxplot(data=p$data, aes(x=Date, color=NULL))
+write.csv(alpha_diversity,file = "alpha.csv")
+```
+
+```{r}
+# create a vector with the 100 most abundant taxa in the dataset.
+topN <- 100
+most_abundant_taxa = sort(taxa_sums(erie), TRUE)[1:topN]
+
+#extract most_abundant_taxa from mouse_data
+mouse_100_OTUs <- prune_taxa(names(most_abundant_taxa), erie)
+
+# create a dataframe with the counts per otu
+mouse_otu_sums <- data.frame(taxa_sums(mouse_100_OTUs))
+
+# use the dataframe to plot the top 100 OTUs in a Rank abundance curve.
+ggplot(mouse_otu_sums,aes(x=row.names(mouse_otu_sums), y=taxa_sums.mouse_100_OTUs.)) + 
+  geom_bar(stat="identity",colour="black",fill="darkturquoise")  +
+  xlab("OTU Rank") + ylab("Number of Sequences per OTU") +
+  scale_x_discrete(expand = c(0,0)) + 
+  scale_y_continuous(expand = c(0,0)) + theme_classic() +
+  ggtitle("Rank Abundance Curve of the Top 100 OTUs") + 
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+```{r}
+library(dplyr)
+erie_family <- erie %>%
+  tax_glom(taxrank = "Phylum") %>%                     # agglomerate at phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+  psmelt() %>%                                         # Melt to long format
+  filter(Abundance > 0.01) %>%                         # Filter out low abundance taxa
+  arrange(Phylum) # Sort data frame alphabetically by phylum
+
+```
+
+```{r}
+#Venne
+# Pick the core (>0.1% relative abundance in >50% of the samples)
+erie_rel <- microbiome::transform(erie, "compositional")
+head(prevalence(erie_rel, detection = 0.1/100, sort = TRUE))
+#head(prevalence(erie_rel, detection = 0.1/100, sort = TRUE, count = TRUE))
+
+```
+
+```{r}
+# Core taxa
+core.taxa.standard <- core_members(erie_rel, detection = 0, prevalence = 20/100)
+erie_core <- core(erie_rel, detection = 0, prevalence = 20/100)
+erie_core2 <- aggregate_rare(erie_rel, "Genus", detection = 0, prevalence = .2)
+core.taxa <- taxa(erie_core)
+#core.abundance <- sample_sums(core(erie_rel, detection = .01, prevalence = .95))
+
+print(erie_core)
+```
+
+```{r}
+
+prevalences <- seq(.05, 1, .05)
+
+detections <- round(10^seq(log10(0.01), log10(.2), length = 9), 3)
+
+# Also define gray color palette
+gray <- gray(seq(0,1,length=5))
+p <- plot_core(erie_rel,
+               plot.type = "lineplot", 
+               colours = gray,
+               prevalences = prevalences, 
+               detections = detections, 
+               min.prevalence = prevalence(erie_rel, sort = TRUE)[100]) +
+  labs(x = "Detection Threshold\n(Relative Abundance (%))") +
+    
+  #Adjusts axis text size and legend bar height
+  theme(axis.text.y= element_text(size=8, face="italic"),
+        axis.text.x.bottom=element_text(size=8),
+        axis.title = element_text(size=10),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))
+
+print(p)
+
+core_otu=otu_table(erie_core)
+write.csv(core_otu,file = "R2R4_loosecore_otu.csv")
+core_tax=tax_table(erie_core)
+write.csv(core_tax,file = "R2R4_loosecore_tax.csv")
+#venn(erie_core,"Date",fraction = 0, weight=FALSE, relative = TRUE, plot=TRUE)
+```
+
+
+
+
+
+
+
+```{r}
+#Graph colors for visual aesthetics 
+phylum_colors <- c("blue", "#72db8c", "#aa34b3", "#781414",
+   "#AD6F3B", "blue", "pink", "black", 
+  "#8569D5", "#5E738F","#8A7C64","#32e3c0", "#CD9BCD","#e09c12",  "#dbcd51", "#f5f389", "#AD6F3B", "#74ab3e",  "#3bbdbf", "#537273",  "#8259bd", "#b2c2ae", "#5F7FC7",  "purple", "green", "#ff0000",  "yellow", "blue")
+
+#, "#17b31c","#c99f04","#16c9c9","#0dd9d9","#f2b80a","#09a3eb")
+
+#8c1111",  "#1b967e", "#32e3c0", "#05f5c5", "#07786b", "#1bb3b3", "#16c9c9", "#0dd9d9", "#05f2f2", "#1a9db8", "#0fb2d4", "#11c9f0", "#0e92cf",  "#0d5ed1", "#1734a6", "#0b38e6", "#121494", "#6668ed", "#5c2edb",  "#17b31c", "#72db8c", "#72db8c", "#4fb307", "#858a81", "#fcb103", "#f2b80a", "#f2ce4b", "#c99f04", "#c9b412", "#e09c12",  "#dbcd51",   "#3bbdbf", "#537273",  "#8259bd", "#b2c2ae", "#5F7FC7", "#a1ddf7", "orange","#DA5724", "#02bd9e", "#784b14", "#ed1313", "#CD9BCD", "#02fae5", "#f5f389", "#AD6F3B", "#74ab3e", "#03fc3d","#D14285", "#652926", "#C84248", "#f7cda1", "#901b94", "#de8e59", "#ff858f", "#d085ff""#63d489", "#123f52", "#fa7b14", "#ab7238" , "#613a13", "#648a62", "#ceb2eb", "#701818", "#55a3a6", "#f2cbf7", "#ff4da0""#752dfa",  "#8569D5", "#5E738F","#D1A33D", "#cb22d4","#8A7C64", "#599861", "#3bbf70", "#fa14eb", "black", "grey","white", "purple", "green", "#ff0000",  "yellow", "blue", "#CDC0B0", "#8B2323", "#E9967A", 
+
+
+#Plot Phyloseq data frame
+ggplot(erie_family, aes(x = Sample, y = Abundance, fill = Phylum)) + 
+  facet_grid(Location~.) +                                                   #Sort by reactor
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = phylum_colors) +                              #Optional
+  scale_x_discrete(
+    #breaks = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "E1", "E2"),
+    #labels = c("", "March 2017", "", "April 2017", "", "August 2017", "", "September 2017", "January 2018", ""), 
+    drop = FALSE
+  ) +
+  
+  # Remove x axis title
+  theme(axis.title.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) + 
+   
+#Format graph for visual appearance
+  guides(fill = guide_legend(reverse = FALSE, keywidth = 1, keyheight = 1)) +
+  ylab("%Relative Abundance (Phyla > 0.02%) \n") +
+  theme(legend.text=element_text(size=rel(1))) +
+  theme(axis.text.y =element_text(size=rel(1))) +
+  theme(axis.text.x =element_text(size=rel(0.5))) +
+  theme(axis.title.y =element_text(size=rel(1.3)))
+  ggtitle("Phylum Composition of Mixed Liquor Bacterial Communities") 
+```
+
+```{r}
+library(dplyr)
+erie_family <- erie %>%
+  tax_glom(taxrank = "Phylum") %>%                     # agglomerate at phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+  psmelt() %>%                                         # Melt to long format
+  #filter(Abundance > 0.002) %>%                         # Filter out low abundance taxa
+  arrange(Phylum) # Sort data frame alphabetically by phylum
+
+#data("erie")
+#gpt <- subset_taxa(erie, Kingdom=="k__Bacteria")
+#gpt <- prune_taxa(names(sort(taxa_sums(gpt),TRUE)[1:25]), gpt)
+#plot_heatmap(gpt, sample.label="Location")+facet_grid(Location~.) 
+
+
+```
+
+```{r}
+p.heat <- ggplot(erie_family, aes(x = Sample, y = Phylum)) + geom_tile(aes(fill = Abundance))
+p.heat <- p.heat + scale_fill_distiller("Abundance", palette = "RdYlBu") +theme_bw()+ theme(panel.spacing.x=unit(0, "lines"))
+
+
+
+p.heat <- p.heat + theme(axis.text.y = element_text(colour = 'black', 
+                                                    size = 8, 
+                                                    face = 'italic')) 
+p.heat <- p.heat + facet_grid(Location~., 
+                              scales = "free") + remove("x.text") 
+p.heat <- p.heat + ylab("Phylum")
+p.heat <- p.heat + theme(axis.title.x=element_blank(),
+                     axis.text.x=element_blank(),
+                     axis.ticks.x=element_blank()) 
+
+# Clean the facet label box
+p.heat <- p.heat + theme(legend.key = element_blank(), 
+                     strip.background = element_rect(colour="black", fill="white"))
+
+print(p.heat)
+plot_heatmap(erie, sample.label="Location")+facet_grid(Location~.) 
+```
+
+
+
+
+```{r}
+subset_Proteobacteria <- subset_taxa(erie, Phylum =="p__Proteobacteria")
+subset_Proteobacteria_Family <- subset_Proteobacteria %>%
+  tax_glom(taxrank = "Family") %>%                     # agglomerate at phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+  psmelt() %>%                                         # Melt to long format
+  #filter(Abundance > 0.00002) %>%                         # Filter out low abundance taxa
+  arrange(Order)                                      # Sort data frame alphabetically by phylum
+
+
+p.heat <- ggplot(subset_Proteobacteria_Family, aes(x = Sample, y = Family, order)) + geom_tile(aes(fill = Abundance))
+p.heat <- p.heat + scale_fill_distiller("Abundance", palette = "RdYlBu") + theme_bw() 
+p.heat <- p.heat + theme(axis.text.y = element_text(colour = 'black', 
+                                                    size = 4, 
+                                                    face = 'italic')) 
+p.heat <- p.heat + facet_grid(Location~., 
+                              scales = "free") + rremove("x.text") 
+p.heat <- p.heat + ylab("Family")
+p.heat <- p.heat + theme(axis.title.x=element_blank(),
+                     axis.text.x=element_blank(),
+                     axis.ticks.x=element_blank()) 
+
+# Clean the facet label box
+p.heat <- p.heat + theme(legend.key = element_blank(), 
+                     strip.background = element_rect(colour="black", fill="white"))
+
+print(p.heat)
+```
+
+```{r}
+#ONLY USE TO LOOK AT SPECIFIC GENERA
+title = "Proteobacteria only"
+subset_Proteobacteria = subset_taxa(erie, Phylum =="p__Campylobacterota")
+subset_Proteobacteria_Family <- subset_Proteobacteria %>%
+  tax_glom(taxrank = "Family") %>%                     # agglomerate at phylum level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+  psmelt() %>%                                         # Melt to long format
+  filter(Abundance > 0.02) %>%                         # Filter out low abundance taxa
+  arrange(Order)                                      # Sort data frame alphabetically by phylum
+
+phylum_colors <- c(
+ "#5F7FC7", "#a1ddf7", "orange","#DA5724", "#02bd9e", "#784b14", "#508578", "#CD9BCD", "#02fae5", "grey", "#74ab3e", "#03fc3d","#D14285", "#652926", "#C84248", "#f7cda1", "#901b94", "#de8e59", "#ff858f", "#d085ff", "#63d489", "#123f52", "#fa7b14", "#ab7238" , "#613a13", "#648a62", "#ceb2eb", "#701818", "#55a3a6", "#f2cbf7", "#ff4da0", "#752dfa",  "#8569D5", "#5E738F","#3bbdbf", "#b2c2ae", "#fa14eb", "orange", "#8c1111", "#ed1313", "#1b967e", "#32e3c0", "#05f5c5", "#07786b", "#1bb3b3", "#16c9c9", "#0dd9d9", "#05f2f2", "#1a9db8", "#0fb2d4", "#11c9f0", "#0e92cf", "#09a3eb", "#0d5ed1", "#1734a6", "#0b38e6", "#121494", "#6668ed", "#5c2edb", "#4603ff", "#17b31c", "#72db8c", "#72db8c", "#4fb307", "#858a81", "#fcb103", "#f2b80a", "#f2ce4b", "#c99f04", "#c9b412", "#e09c12", "#c112e0", "#db67f0", "#6e0c75", "#aa34b3", "#781414", "#dbcd51", "#66db51",  "#3bbdbf", "#537273",  "#8259bd", "#b2c2ae")
+#"black", "grey","white", "purple", "green", "#ff0000",  "yellow", "blue", "#CDC0B0", #8B2323", "#E9967A", "#6c7eba", "pink", "orange" "#8c1111", "#ed1313", "#1b967e", "#32e3c0", "#05f5c5", "#07786b", "#1bb3b3", "#16c9c9", "#0dd9d9", "#05f2f2", "#1a9db8", "#0fb2d4", "#11c9f0", "#0e92cf", "#09a3eb", "#0d5ed1", "#1734a6", "#0b38e6", "#121494", "#6668ed", "#5c2edb", "#4603ff", "#17b31c", "#72db8c", "#72db8c", "#4fb307", "#858a81", "#fcb103", "#f2b80a", "#f2ce4b", "#c99f04", "#c9b412", "#e09c12", "#c112e0", "#db67f0", "#6e0c75", "#aa34b3", "#781414", "#dbcd51", "#66db51",  "#3bbdbf", "#537273",  "#8259bd", "#b2c2ae", 
+
+
+ggplot(subset_Proteobacteria_Family, aes(x = Sample, y = Abundance, fill = Family, order)) + 
+  geom_bar(stat = "identity") +
+  facet_grid(Location~.) +  
+  scale_fill_manual(values = phylum_colors) +
+  scale_x_discrete(
+    #breaks = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "E1", "E2"),
+    #labels = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "E1", "E2"), 
+    drop = FALSE
+  ) +
+  # Remove x axis title
+  theme(axis.title.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) + 
+  #
+  guides(fill = guide_legend(reverse = FALSE, keywidth =0.5, keyheight =0.5)) +
+   theme(legend.text=element_text(size=rel(0.5))) +
+  ylab("%Relative Abundance (Family > 0.02%) \n") +
+  theme(axis.text.y =element_text(size=rel(1))) +
+  theme(axis.title.y =element_text(size=rel(1)))
+  #ggtitle("Genus Composition of TC Mixed Liquor Firmicutes Fraction") 
+
+```
+
+```{r}
+title = "Betaroteobacteria only"
+subset_Proteobacteria = subset_taxa(erie, Family =="f__Nitrospira")
+subset_Proteobacteria_Family <- subset_Proteobacteria %>%
+  tax_glom(taxrank = "Species") %>%                     # agglomerate at Genus level
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+  psmelt() %>%                                         # Melt to long format
+  filter(Abundance > 0.01) %>%                         # Filter out low abundance taxa
+  arrange(Order)                                      # Sort data frame alphabetically by phylum
+
+phylum_colors <- c(
+ "#5F7FC7", "#a1ddf7", "orange","#DA5724", "#02bd9e", "#784b14", "#508578", "#CD9BCD", "#02fae5", "#f5f389","#AD6F3B", "#74ab3e", "#03fc3d","#D14285", "#652926", "#C84248", "#f7cda1", "#901b94", "#de8e59", "#ff858f", "#d085ff", "#63d489", "#123f52", "#fa7b14", "#ab7238" , "#613a13", "#648a62", "#ceb2eb", "#701818", "#55a3a6", "#f2cbf7", "#ff4da0", "#752dfa",  "#8569D5", "#5E738F","#D1A33D", "#cb22d4","#8A7C64", "#599861", "#3bbf70", "#fa14eb")
+#"black", "grey","white", "purple", "green", "#ff0000",  "yellow", "blue", "#CDC0B0", #8B2323", "#E9967A", "#6c7eba", "pink", "orange" "#8c1111", "#ed1313", "#1b967e", "#32e3c0", "#05f5c5", "#07786b", "#1bb3b3", "#16c9c9", "#0dd9d9", "#05f2f2", "#1a9db8", "#0fb2d4", "#11c9f0", "#0e92cf", "#09a3eb", "#0d5ed1", "#1734a6", "#0b38e6", "#121494", "#6668ed", "#5c2edb", "#4603ff", "#17b31c", "#72db8c", "#72db8c", "#4fb307", "#858a81", "#fcb103", "#f2b80a", "#f2ce4b", "#c99f04", "#c9b412", "#e09c12", "#c112e0", "#db67f0", "#6e0c75", "#aa34b3", "#781414", "#dbcd51", "#66db51",  "#3bbdbf", "#537273",  "#8259bd", "#b2c2ae", 
+
+
+ggplot(subset_Proteobacteria_Family, aes(x = Sample, y = Abundance, fill = Species, order)) + 
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = phylum_colors) +
+  scale_x_discrete(
+    #breaks = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "E1", "E2"),
+    #labels = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "E1", "E2"), 
+    drop = FALSE
+  ) +
+  # Remove x axis title
+  theme(axis.title.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) + 
+  #
+  guides(fill = guide_legend(reverse = FALSE, keywidth = 1, keyheight = 1)) +
+   theme(legend.text=element_text(size=rel(0.5))) +
+  ylab("%Relative Abundance (Species > 0.01%) \n") +
+  theme(axis.text.y =element_text(size=rel(1))) +
+  theme(axis.title.y =element_text(size=rel(1)))
+  #ggtitle("Genus Composition of TC Mixed Liquor Firmicutes Fraction") 
+
+```
+
+```{r}
+#PCoA analysis
+
+# Fix month levels in sample_data
+sample_data(erie)$Location <- factor(
+  sample_data(erie)$Location)
+  #levels = c("Aerobic")
+
+
+
+# Ordinate
+erie_pcoa <- ordinate(
+  physeq = erie, 
+  method = "PCoA", 
+  distance = "bray"
+)
+
+# Plot 
+plot_ordination(
+  physeq = erie,
+  ordination = erie_pcoa,
+  color = "Date",
+  shape = "Location",
+  title = "Mixed liquor bacterial Communities"
+) + 
+  scale_color_manual(values = c("#DA5724", "black",
+    "#4daf4a", "lightblue2", "pink3", "yellow", "purple", "orange", "#1734a6")
+  ) +
+  geom_point(aes(color = Date), alpha = 0.7, size = 4) +
+  geom_point(size = 2)  
+```
+
+
+```{r}
+#NMDS analysis
+
+set.seed(1)
+
+# Ordinate
+erie_nmds <- ordinate(
+  physeq = erie, 
+  method = "NMDS", 
+  distance = "bray"
+) 
+
+plot_ordination(
+  physeq = erie,
+  ordination = erie_nmds,
+  color = "Date",
+  shape = "Location",
+  title = "NMDS of mixed liquor bacterial Communities"
+) + 
+  scale_color_manual(values = c("#DA5724", "#ffae19",
+    "#4daf4a", "#1919ff", "darkorchid3", "magenta",  "#f2b80a",  "#b2c2ae", "#8569D5", "#1b967e", "#0d5ed1", "#1734a6")
+  ) +
+  geom_point(aes(color = Date), alpha = 0.7, size = 4) +
+  geom_point(colour = "grey90", size = 1.5) 
+
+
+```
+```{r}
+# constrained ordination test using Correspondence Analysis (CA)
+
+mouse_CA <- ordinate(erie, "CCA")
+
+# check ordination with a scree plot
+plot_scree(mouse_CA, "Scree plot of mouse scaled Correspondence analysis")
+
+(p1_CA <- plot_ordination(erie, mouse_CA, "Location",
+                          color="Date",shape="Location", label = "SRT") +
+    scale_color_manual(values = c("steelblue","magenta",  "#f2b80a",  "#b2c2ae", "#8569D5", "#1b967e", "#0d5ed1", "#1734a6","#DA5724")) +
+    geom_point(aes(color = Date), alpha = 0.4, size = 4))
+```
+
+
+```{r}
+# Now doing a constrained Correspondence Analysis (CCA), using time
+#mouse_CCA <- ordinate(erie, formula = erie ~ Ammonia + COD, "CCA")
+
+mouse_CCA <- ordinate(
+    physeq = erie, 
+    method = "CCA",
+    formula = ~ Ammonia + TSS + Phosphorus + COD +TN)
+
+# check ordination with a scree plot
+plot_scree(mouse_CCA, "Scree plot of aerobic community Constrained Correspondence analysis")
+
+# CCA plot
+CCA_plot <- plot_ordination(erie, mouse_CCA, type="SampleID", color="Date",label="SRT") + 
+  scale_color_manual(values = c("steelblue","magenta",  "#f2b80a",  "#b2c2ae", "#8569D5", "#1b967e", "#0d5ed1", "#1734a6","#DA5724")
+  ) +
+  geom_point(aes(color = Date), alpha = 0.4, size = 4)
+
+# Now add the environmental variables as arrows into a matrix
+arrowmat <- vegan::scores(mouse_CCA, display = "bp")
+
+```
+
+```{r}
+
+# transform matrix into a dataframe, and add labels
+arrowdf <- data.frame(labels = rownames(arrowmat), arrowmat)
+
+
+# Define the arrow aesthetic mapping
+arrow_map <- aes(xend = CCA1, 
+                 yend = CCA2, 
+                 x = 0, 
+                 y = 0,
+                 shape= NULL,
+                 color= NULL,
+                 label=labels)
+
+label_map <- aes(x = 1.2 * CCA1, 
+                 y = 1.2 * CCA2,
+                 shape= NULL,
+                 color= NULL,
+                 label=labels)
+
+arrowhead = arrow(length = unit(0.02, "npc"))
+
+# Make a new graphic
+CCA_plot + 
+  geom_segment(
+    mapping = arrow_map, 
+    size = .5, 
+    data = arrowdf, 
+    color = "gray", 
+    arrow = arrowhead
+  ) + 
+  geom_text(
+    mapping = label_map, 
+    size = 4,  
+    data = arrowdf, 
+    show.legend = FALSE
+  )
+```
+
+```{r}
+anova.cca(mouse_CCA)
+anova.cca(mouse_CCA, by="terms")
+anova.cca(mouse_CCA, by="axis")
+vif.cca(mouse_CCA)
+mouse_CCA
+```
+
+```{r}
+plot(mouse_CCA, xlim=c(-2,2), ylim=c(-2,2), display=c("sp","cn","wa"))
+```
+
+
+```{r}
+#phylogenetic treae
+
+data(GlobalPatterns)
+GlobalPatterns
+
+phy_tree(GlobalPatterns)$node.label = substr(phy_tree(GlobalPatterns)$node.label, 1, 4)
+ntaxa(GlobalPatterns)
+physeq = prune_taxa(taxa_names(GlobalPatterns)[1:50], GlobalPatterns)
+plot_tree(physeq)
+
+GP.chl = subset_taxa(GlobalPatterns, Phylum == "Chlamydiae")
+plot_tree(GP.chl, color = "SampleType", shape = "Family", label.tips = "Genus", 
+    size = "abundance", plot.margin = 0.5, ladderize = TRUE)
+```
+
+
+```{r}
+#PCA
+erie_not_na <- erie %>%
+  subset_samples(
+    !is.na(TSS) & 
+      !is.na(VSS) &
+      !is.na(Ammonia) & 
+      #!is.na(Phosphorus) &
+      !is.na(COD) &
+      !is.na(SRT) &
+      !is.na(Temperature)
+  )
+    
+bray_not_na <- phyloseq::distance(physeq = erie_not_na, method = "bray")
+
+# CAP ordinate
+cap_ord <- ordinate(
+    physeq = erie_not_na, 
+    method = "CCA",
+    distance = bray_not_na,
+    formula = ~ Ammonia + COD + Phosphorus + TSS + VSS
+)
+
+# CAP plot
+cap_plot <- plot_ordination(
+  physeq = erie_not_na, 
+  ordination = cap_ord, 
+    color = "Date", 
+    axes = c(1,2)
+) + 
+    aes(shape = Location) + 
+    geom_point(aes(colour = Date), alpha = 0.4, size = 4) + 
+    geom_point(colour = "grey90", size = 1.5) + 
+    scale_color_manual(values = c("#DA5724", "#ffae19",
+    "#4daf4a", "#1919ff", "darkorchid3", "magenta",  "#f2b80a",  "#b2c2ae", "#8569D5", "#1b967e", "#0d5ed1", "#1734a6")
+    )
+
+arrowmat <- vegan::scores(cap_ord, display = "bp")
+arrowdf <- data.frame(labels = rownames(arrowmat), arrowmat)
+
+arrow_map <- aes(xend = CCA1, 
+    yend = CCA2, 
+    x = 0, 
+    y = 0, 
+    shape = NULL, 
+    color = NULL, 
+    label = labels)
+
+label_map <- aes(x = 1.3 * CCA1, 
+    y = 1.3 * CCA2, 
+    shape = NULL, 
+    color = NULL, 
+    label = labels)
+
+arrowhead = arrow(length = unit(0.02, "npc"))
+
+cap_plot + 
+  geom_segment(
+    mapping = arrow_map, 
+    size = .5, 
+    data = arrowdf, 
+    color = "gray", 
+    arrow = arrowhead
+  ) + 
+  geom_text(
+    mapping = label_map, 
+    size = 4,  
+    data = arrowdf, 
+    show.legend = FALSE
+  )
+
+```
+```{r}
+spe <- sharedfile
+env <- mapfile
+#spelog <- decostand(spe, "log")
+ccamodel <- cca()
+```
+
+```{r}
+pc = read.csv("/Users/huanqi/Huanqi/Umich/Research OS/AS microbial analysis/DNA/Feb_Sep_16S/Sequencing data/spear.csv", header = TRUE)
+com = pc[,2:33]
+cc = cor(com,method = "spearman")
+corrplot(cc)
+corrplot(cc, tl.col = "black", order = "hclust", hclust.method = "average", addrect = 4, tl.cex = 0.7)
+```
+```{r}
+data(GlobalPatterns)
+data(esophagus)
+data(enterotype)
+data(soilrep)
+
+?GlobalPatterns
+data("GlobalPatterns")
+gpt <- subset_taxa(GlobalPatterns, Kingdom=="Bacteria")
+gpt <- prune_taxa(names(sort(taxa_sums(gpt),TRUE)[1:300]), gpt)
+plot_heatmap(gpt, sample.label="SampleType")
+```
+
+```{r}
+
+
+```
