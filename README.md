@@ -17,8 +17,10 @@ anoxic; community assembly; flocs; microbial diversity; suspended growth; tempor
 ## Overview
 This repo provides the source code and implementation details of this paper.
 
-## Contents
+## How to use 
+Operating systems: Windows, or Mac, or Linux, any versions which can run R (version >= 3.2).
+
+Dependencis: R (version >=3.5; https://www.r-project.org/), R packages:vegan,dplyr, scales, grid, reshape2, phylosep, ggpubr, corrplot, eulerr, microbiome.
 The R script contains source codes for data analysis and graph generation.
 
-Data
 
